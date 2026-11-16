@@ -90,10 +90,10 @@ Tests include mocking malformed CSVs to verify audit.log behavior, asserting ide
 If this tool were promoted to a production enterprise service processing >10,000 devices concurrently, the following changes would be triggered:
 
 Database Migration: Migrate from SQLite to PostgreSQL to handle concurrent write locks and larger dataset footprints.
-```text
+
 Transactional Outbox Pattern: Currently, failed alerts are written to a local JSON file. In a distributed system, this risks data loss. I would implement the Outbox Pattern by writing failed alerts to a pending_alerts table in the database within the same transaction as the compliance evaluation, ensuring at-least-once delivery via a separate background worker.
 
 Authentication: Add API key validation or OAuth2 if exposing this logic via a REST API.
-
+```text
 
 
