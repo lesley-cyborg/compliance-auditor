@@ -1,0 +1,4 @@
+   device_id,hostname,bitlocker_status,last_seen
+   DEV006,GOOD-PC,256-bit,2026-11-17T10:00:00
+   ,BAD-PC-NO-ID,128-bit,2026-11-17T10:00:00
+   DEV008,BAD-STATUS,512-bit,2026-11-17T10:00:00
