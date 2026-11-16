@@ -16,16 +16,16 @@ Built with a "boring by default" philosophy: prioritizing reliability, simplicit
 [ Discord Webhook ] ◀──(alert.py)─── [ Non-Compliant Devices ]
        │                                      │
        └──(on 429/500 error)──▶ [ failed_alerts.json (Dead Letter Queue) ]
-
+```
 ## 🚀 Quick Start
 
 ## Prerequisites
-
+```text
 Python 3.10+
 A free Discord Server with an Incoming Webhook configured.
-
+```
 ##Installation
-
+```text
 git clone https://github.com/yourusername/compliance-auditor.git
 cd compliance-auditor
 python -m venv venv
