@@ -1,12 +1,41 @@
-# 🛡️ Automated Endpoint Compliance Auditor
+# 🛡️ Automated Endpoint Compliance Auditor (V2: Distributed Service)
 
-A resilient, local CLI tool that automates endpoint security compliance checks. It ingests device inventory, evaluates it against a configurable security policy (e.g., BitLocker encryption standards), persists the state, and alerts on violations via Discord.
+A resilient, distributed REST API for automated endpoint security compliance checks. It ingests device inventory, evaluates it against configurable security policies, and guarantees alert delivery using the **Transactional Outbox Pattern**.
 
-Built with a "boring by default" philosophy: prioritizing reliability, simplicity, and zero-infrastructure overhead over cloud-native complexity.
+Built with a "boring by default" philosophy, prioritizing data integrity, API security, and decoupled background processing over unnecessary cloud complexity.
 
 ## 🏗️ Architecture & Flow
 
 ```text
+[ Client / CI/CD ] ──(HTTP POST + API Key)──▶ [ FastAPI Server ]
+                                                    │
+                                                    ▼ (1. Upsert)
+                                            [ PostgreSQL Database ]
+                                                    │
+                                                    ▼ (2. Evaluate & Queue)
+                                            [ Outbox Table (JSONB) ] 
+                                                    │
+                                                    ▼ (3. Poll every 30s)
+[ Discord Webhook ] ◀──(Tenacity Retries)── [ Background Worker (worker.py) ]# 🛡️ Automated Endpoint Compliance Auditor (V2: Distributed Service)
+
+A resilient, distributed REST API for automated endpoint security compliance checks. It ingests device inventory, evaluates it against configurable security policies, and guarantees alert delivery using the **Transactional Outbox Pattern**.
+
+Built with a "boring by default" philosophy, prioritizing data integrity, API security, and decoupled background processing over unnecessary cloud complexity.
+
+## 🏗️ Architecture & Flow
+
+```text
+[ Client / CI/CD ] ──(HTTP POST + API Key)──▶ [ FastAPI Server ]
+                                                    │
+                                                    ▼ (1. Upsert)
+                                            [ PostgreSQL Database ]
+                                                    │
+                                                    ▼ (2. Evaluate & Queue)
+                                            [ Outbox Table (JSONB) ] 
+                                                    │
+                                                    ▼ (3. Poll every 30s)
+[ Discord Webhook ] ◀──(Tenacity Retries)── [ Background Worker (worker.py) ]
+
 [ mock_inventory.csv ] ──(ingest.py)──▶ [ SQLite Database ]
                                               │
                                               ▼
@@ -22,12 +51,14 @@ Built with a "boring by default" philosophy: prioritizing reliability, simplicit
 ## Prerequisites
 ```text
 Python 3.10+
+PostgreSQL 15+ installed locally (or via Docker)
 A free Discord Server with an Incoming Webhook configured.
 ```
 ##Installation
 ```text
 git clone https://github.com/yourusername/compliance-auditor.git
 cd compliance-auditor
+git checkout v2-distributed-service #Ensure you are on the V2 branch
 python -m venv venv
 
 # Activate virtual environment
@@ -42,58 +73,67 @@ Copy the example environment file and add your Discord Webhook URL:
 
 cp .env.example .env
 # Edit .env and add your DISCORD_WEBHOOK_URL
+
+## Running the Service
+
+You will need two terminal windows: one for the API, one for the background worker.
+
+Terminal 1: Start the FastAPI Server 
+
+uvicorn main:app --reload
+# API will be available at http://127.0.0.1:8000
+# Interactive Swagger UI: http://127.0.0.1:8000/docs
+
+Terminal 2: Start the Background Worker
+
+python worker.py
+# Will poll the outbox table every 30 seconds
+
+Using the API
+
+All protected endpoints require the X-API-Key header.
+
+Go to http://127.0.0.1:8000/docs
+Click Authorize at the top right.
+Enter your API key (default: super-secret-api-key-123).
+Use the UI to POST /ingest (upload a CSV), POST /evaluate, and watch the worker automatically trigger POST /alert.
 ```
 ## Usage
 ```text
 The tool uses argparse subcommands. You can run the pipeline step-by-step, or all at once.
 
-# Run the entire pipeline (Ingest -> Evaluate -> Alert)
-python main.py run --file mock_inventory.csv
+🧠 Design Decisions & ADRs
 
-# Or run steps individually:
-python main.py ingest --file mock_inventory.csv
-python main.py evaluate
-python main.py alert
+ADR 001: Database Selection (PostgreSQL over SQLite)
 
-```
-## 🛡️ Resiliency & Failure Handling
+Context: V1 used SQLite. V2 targets a distributed service architecture where multiple processes (API server + background worker) need concurrent, safe access to the same data.
 
-This tool is designed to handle the messy reality of enterprise data and network flakiness.
-Data Quality Failures: If the input CSV contains malformed rows (e.g., missing device_id or invalid encryption status), the ingest process catches the error, logs the raw row and exception to data/audit.log, and continues processing. It never crashes the whole run.
-Network/Alerting Failures: If the Discord webhook returns a 429 Too Many Requests or 500 Server Error, the alert process uses the tenacity library to automatically retry with exponential backoff (up to 3 attempts).
-Dead Letter Queue (DLQ): If the webhook fails permanently after all retries, the alert payload is safely wrapped with a timestamp and written to data/failed_alerts.json for manual review, ensuring no compliance violations are silently dropped.
+Decision: Migrate to PostgreSQL.
 
-## 🧠 Design Decisions & ADRs
+Consequences: Eliminates SQLite file-locking issues during concurrent reads/writes. Enables advanced features like native JSONB for the Outbox pattern.
 
-ADR 001: Database Selection (SQLite over PostgreSQL)
-Context: Needed a persistent datastore for device state.
-Decision: Use Python's built-in sqlite3 module.
-Consequences: Zero infrastructure overhead, zero credentials to manage, and instant local execution. Postgres was rejected as it violates the "boring by default" principle for a local CLI tool processing <10,000 records.
+ADR 002: The Transactional Outbox Pattern
 
-ADR 002: Database Indexing Strategy (Partial Index)
-Context: Needed to optimize the query that fetches non-compliant devices for alerting.
-Decision: Implemented a Partial Index: CREATE INDEX idx_non_compliant ON devices(device_id) WHERE is_compliant = 0;
-Consequences: In a healthy environment, 95%+ of devices are compliant. A standard B-Tree index on a boolean column is highly inefficient and usually ignored by the query planner. A partial index keeps the index footprint tiny and ensures O(log N) lookups specifically for the 5% of devices we actually care about.
+Context: In V1, failed alerts were written to a local JSON file. In a distributed system, updating the database and sending an HTTP request are two separate operations, risking data loss if the server crashes between them.
 
-ADR 003: Alerting Mechanism
-Context: Needed automated alerting without setting up SMTP servers or paid SaaS.
-Decision: Discord Incoming Webhooks with Rich Embeds.
-Consequences: Zero cost, instant visual feedback, and easy to screenshot for portfolio/documentation purposes.
+Decision: Implement the Outbox Pattern. When evaluate runs, it updates the devices table AND inserts a record into the outbox table in the same database transaction.
 
-## 🧪 Testing
+Consequences: Guarantees at-least-once delivery. The background worker safely polls the outbox table. If Discord is down, the record remains processed = FALSE and is retried on the next cycle.
 
-The project includes a comprehensive pytest suite (11 tests) covering happy paths and failure modes, using temporary databases to ensure complete isolation.
+ADR 003: API Authentication
 
-Tests include mocking malformed CSVs to verify audit.log behavior, asserting idempotency (no duplicate rows on re-run), and mocking HTTP 429/500 responses to verify tenacity retry logic and failed_alerts.json fallback.
+Context: Exposing compliance data and alerting mechanisms requires basic access control without the overhead of full OAuth2 for an internal tool.
 
-## 🔄 Future Improvements (Scaling to 10x)
-If this tool were promoted to a production enterprise service processing >10,000 devices concurrently, the following changes would be triggered:
+Decision: API Key authentication via a custom X-API-Key header, enforced via FastAPI dependencies.
 
-Database Migration: Migrate from SQLite to PostgreSQL to handle concurrent write locks and larger dataset footprints.
+Consequences: Lightweight, stateless, and easy to rotate. Requests without the key are rejected with 403 Forbidden before hitting business logic.
 
-Transactional Outbox Pattern: Currently, failed alerts are written to a local JSON file. In a distributed system, this risks data loss. I would implement the Outbox Pattern by writing failed alerts to a pending_alerts table in the database within the same transaction as the compliance evaluation, ensuring at-least-once delivery via a separate background worker.
+🔄 Future Improvements (Scaling to 100x)
 
-Authentication: Add API key validation or OAuth2 if exposing this logic via a REST API.
-```text
+If this service scales to process >100,000 devices or requires high availability:
 
+Message Queue: Replace the polling worker.py with an event-driven architecture using RabbitMQ or AWS SQS, triggered by Postgres logical replication (e.g., Debezium).
 
+Containerization: Package the API and Worker into separate Docker containers and deploy via Kubernetes or AWS ECS.
+
+Observability: Integrate Prometheus/Grafana for metrics (e.g., outbox_queue_depth, alert_success_rate) and OpenTelemetry for distributed tracing.

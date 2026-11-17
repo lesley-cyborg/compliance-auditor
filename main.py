@@ -1,80 +1,49 @@
-import argparse
-import sys
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi.responses import JSONResponse
+from auth import get_api_key
+from schemas import IngestResponse, EvaluateResponse, AlertResponse
+from services.ingest import ingest_csv
+from services.evaluate import evaluate_devices
+from services.alert import process_outbox
 import os
-from dotenv import load_dotenv
 
-# Import our core modules
-from ingest import ingest_csv
-from evaluate import evaluate_devices
-from alert import alert
+app = FastAPI(
+    title="Endpoint Compliance Auditor V2",
+    description="A distributed compliance service with Transactional Outbox pattern.",
+    version="2.0.0"
+)
 
-# Load environment variables at the entry point
-load_dotenv()
+# --- API Endpoints ---
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Automated Endpoint Compliance Auditor",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  python main.py run --file mock_inventory.csv   # Run the full pipeline
-  python main.py ingest --file mock_inventory.csv # Only ingest data
-  python main.py evaluate                        # Only evaluate policy
-  python main.py alert                           # Only check and send alerts
-        """
-    )
-
-    subparsers = parser.add_subparsers(dest="command", help="Available commands")
-
-    # 1. Run Command (Full Pipeline)
-    run_parser = subparsers.add_parser("run", help="Run the full compliance pipeline")
-    run_parser.add_argument("--file", required=True, help="Path to the CSV inventory file")
-
-    # 2. Ingest Command
-    ingest_parser = subparsers.add_parser("ingest", help="Ingest CSV data into the database")
-    ingest_parser.add_argument("--file", required=True, help="Path to the CSV inventory file")
-
-    # 3. Evaluate Command
-    subparsers.add_parser("evaluate", help="Evaluate devices against the security policy")
-
-    # 4. Alert Command
-    subparsers.add_parser("alert", help="Check for non-compliant devices and send alerts")
-
-    args = parser.parse_args()
-
-    if not args.command:
-        parser.print_help()
-        sys.exit(1)
-
-    print("=" * 60)
-    print(f".... Starting Compliance Auditor: {args.command.upper()}")
-    print("=" * 60)
-
+@app.post("/ingest", response_model=IngestResponse, dependencies=[Depends(get_api_key)])
+async def ingest_endpoint(file: UploadFile = File(...)):
+    """Upload a CSV file to ingest device inventory."""
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are allowed")
+    
+    # Save uploaded file temporarily
+    temp_path = f"./data/temp_{file.filename}"
+    with open(temp_path, "wb") as buffer:
+        buffer.write(await file.read())
+    
     try:
-        if args.command == "run":
-            print("\n[1/3]. Ingesting data...")
-            ingest_csv(args.file)
-            
-            print("\n[2/3].. Evaluating policy...")
-            evaluate_devices()
-            
-            print("\n[3/3]... Checking alerts...")
-            alert()
-            
-            print("\n.... Full pipeline completed successfully!")
+        result = ingest_csv(temp_path)
+        return result
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
-        elif args.command == "ingest":
-            ingest_csv(args.file)
+@app.post("/evaluate", response_model=EvaluateResponse, dependencies=[Depends(get_api_key)])
+async def evaluate_endpoint():
+    """Evaluate devices against policy and queue violations in the Outbox."""
+    return evaluate_devices()
 
-        elif args.command == "evaluate":
-            evaluate_devices()
+@app.post("/alert", response_model=AlertResponse, dependencies=[Depends(get_api_key)])
+async def alert_endpoint():
+    """Process the Outbox and send alerts to Discord."""
+    return process_outbox()
 
-        elif args.command == "alert":
-            alert()
-
-    except Exception as e:
-        print(f"\n❌ Pipeline failed with error: {e}")
-        sys.exit(1)
-
-if __name__ == "__main__":
-    main()
+@app.get("/health")
+async def health_check():
+    """Public endpoint to check if the service is running."""
+    return {"status": "healthy"}
