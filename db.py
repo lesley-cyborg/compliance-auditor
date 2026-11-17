@@ -1,56 +1,67 @@
-import sqlite3
 import os
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Fallback to a default path if .env is missing the variable
-DB_PATH = os.getenv("DB_PATH", "./data/compliance.db")
-
 def get_connection():
-    """Returns a connection to the SQLite database."""
-    # Ensure the 'data/' directory exists so SQLite doesn't crash
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    
-    conn = sqlite3.connect(DB_PATH)
-    # Allows us to access columns by name later (e.g., row['device_id'])
-    conn.row_factory = sqlite3.Row 
-    return conn
+    """Returns a connection to the PostgreSQL database."""
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST", "localhost"),
+        port=os.getenv("DB_PORT", "5432"),
+        user=os.getenv("DB_USER", "auditor"),
+        password=os.getenv("DB_PASSWORD", "securepassword123"),
+        dbname=os.getenv("DB_NAME", "compliance_db"),
+        cursor_factory=RealDictCursor
+    )
 
 def init_db():
-    """Initializes the database schema and indexes."""
+    """Initializes the database schema, indexes, and outbox table."""
     conn = get_connection()
+    # Autocommit is required for DDL (CREATE TABLE) in psycopg2
+    conn.autocommit = True 
     cursor = conn.cursor()
     
-    # The SQL you provided, formatted as Python strings
+    # 1. Devices Table (Note: Postgres uses native BOOLEAN)
     schema_sql = """
     CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
         hostname TEXT NOT NULL,
         bitlocker_status TEXT CHECK(bitlocker_status IN ('256-bit', '128-bit', 'none')),
         last_seen TEXT NOT NULL,
-        is_compliant INTEGER DEFAULT 0
+        is_compliant BOOLEAN DEFAULT FALSE
     );
     """
     
+    # 2. Partial Index (Postgres syntax)
     index_sql = """
     CREATE INDEX IF NOT EXISTS idx_non_compliant 
     ON devices(device_id) 
-    WHERE is_compliant = 0;
+    WHERE is_compliant = FALSE;
+    """
+
+    # 3. Outbox Table (For the Transactional Outbox Pattern)
+    outbox_sql = """
+    CREATE TABLE IF NOT EXISTS outbox (
+        id SERIAL PRIMARY KEY,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        payload JSONB NOT NULL,
+        processed BOOLEAN DEFAULT FALSE
+    );
     """
     
     try:
         cursor.execute(schema_sql)
         cursor.execute(index_sql)
-        conn.commit()
-    except sqlite3.Error as e:
-        print(f"Database initialization error: {e}")
+        cursor.execute(outbox_sql)
+        print("✅ Database schema, indexes, and outbox initialized successfully.")
+    except psycopg2.Error as e:
+        print(f"❌ Database initialization error: {e}")
         raise
     finally:
+        cursor.close()
         conn.close()
 
-# Allows you to run `python db.py` to test it independently
 if __name__ == "__main__":
     init_db()
-    print(f"✅ Database successfully initialized at {DB_PATH}")
