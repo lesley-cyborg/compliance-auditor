@@ -36,16 +36,26 @@ Built with a "boring by default" philosophy, prioritizing data integrity, API se
                                                     ▼ (3. Poll every 30s)
 [ Discord Webhook ] ◀──(Tenacity Retries)── [ Background Worker (worker.py) ]
 
+[ mock_inventory.csv ] ──(ingest.py)──▶ [ SQLite Database ]
+                                              │
+                                              ▼
+                                       (evaluate.py)
+                                              │
+                                              ▼
+[ Discord Webhook ] ◀──(alert.py)─── [ Non-Compliant Devices ]
+       │                                      │
+       └──(on 429/500 error)──▶ [ failed_alerts.json (Dead Letter Queue) ]
+```
 ## 🚀 Quick Start
 
 ## Prerequisites
-
+```text
 Python 3.10+
 PostgreSQL 15+ installed locally (or via Docker)
 A free Discord Server with an Incoming Webhook configured.
-
+```
 ##Installation
-
+```text
 git clone https://github.com/yourusername/compliance-auditor.git
 cd compliance-auditor
 git checkout v2-distributed-service #Ensure you are on the V2 branch
@@ -56,9 +66,9 @@ python -m venv venv
 # macOS/Linux: source venv/bin/activate
 
 pip install -r requirements.txt
-
+```
 ## Configuration
-
+```text
 Copy the example environment file and add your Discord Webhook URL:
 
 cp .env.example .env
@@ -87,6 +97,10 @@ Go to http://127.0.0.1:8000/docs
 Click Authorize at the top right.
 Enter your API key (default: super-secret-api-key-123).
 Use the UI to POST /ingest (upload a CSV), POST /evaluate, and watch the worker automatically trigger POST /alert.
+```
+## Usage
+```text
+The tool uses argparse subcommands. You can run the pipeline step-by-step, or all at once.
 
 🧠 Design Decisions & ADRs
 
